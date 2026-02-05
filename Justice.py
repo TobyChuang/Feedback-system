@@ -15,9 +15,9 @@ class Config:
     DB_NAME = 'feedback_data.db'
     SECRET_KEY = os.environ.get('SECRET_KEY', 'dev_key_123')
 
-    # === Gmail 設定 (Google Mail) ===
+# === Gmail 設定 ===
     SMTP_SERVER = 'smtp.gmail.com'
-    SMTP_PORT = 465  # Gmail SSL 專用埠
+    SMTP_PORT = 587  # [修改] 改回 587
     
     # 讀取 Render 環境變數
     SENDER_EMAIL = os.environ.get('SENDER_EMAIL') 
@@ -160,3 +160,4 @@ def logout():
 
 if __name__ == '__main__':
     app.run(debug=True)
+
