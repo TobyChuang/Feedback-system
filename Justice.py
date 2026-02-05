@@ -1,3 +1,4 @@
+import os
 import smtplib
 from email.mime.text import MIMEText
 from datetime import datetime
@@ -8,46 +9,27 @@ import pandas as pd
 app = Flask(__name__)
 
 # ==========================================
-# [使用者參數設定區]
+# [設定區]
 # ==========================================
 class Config:
     DB_NAME = 'feedback_data.db'
     
-    # # 1. Email 發信伺服器設定
-    # SMTP_SERVER = 'smtp.gmail.com'
-    # SMTP_PORT = 587
-    # SENDER_EMAIL = 'toby771213@gmail.com' 
-    # SENDER_PASSWORD = 'qpjp aubx vlte vyvy' 
+    # 讀取 Render 環境變數，如果沒有就用預設值 (確保安全性)
+    SECRET_KEY = os.environ.get('SECRET_KEY', 'dev_key_123')
 
-    # === Apple iCloud / @me.com 設定 ===
+    # === Email 設定 (Apple iCloud 專用) ===
     SMTP_SERVER = 'smtp.mail.me.com'
     SMTP_PORT = 587
-    SENDER_EMAIL = 'toby1213@me.com'     
-    # 剛剛申請到的 Apple App 專用密碼
-    SENDER_PASSWORD = 'vxam-nfle-biuz-qsgb'
+    
+    # 關鍵：這裡會去讀取你在 Render 設定的環境變數
+    SENDER_EMAIL = os.environ.get('SENDER_EMAIL') 
+    SENDER_PASSWORD = os.environ.get('SENDER_PASSWORD')
 
-
-    # 2. Session 安全密鑰
-    SECRET_KEY = 'super_secret_key_dont_share'
-
-    # 3. 後台登入帳號密碼
-    USERS = {
-        'S17081': '0960234600',      
-        'S23072': '0932615118',     
-        'S5801': '0932674727',
-        'S17734': '1223334444',
-        'S27358': '1223334444',
-        'S22962': '1223334444',
-        'S21610': '0960550739'         
-    }
-
-    # 4. ### 修改重點：部門與主管 Email 對照表 (支援多人) ###
-    # 規則：請用中括號 [] 把 Email 包起來，中間用逗號隔開
+    # === 部門 Email 對照表 ===
+    # 請填入各部門主管的 Email (可以填你自己的信箱測試)
     DEPT_MAILS = {
-        # '5540': ['S17081@chipmos.com', 'S23072@chipmos.com', '@chipmos.com'],  # 三人收信
-        # '5541': ['@chipmos.com'],   # 即便只有一人，建議也用 [] 包起來保持格式統一
-        '5542':   ['S21610@chipmos.com']
-        # '5545': ['S17734@chipmos.com']     # 預設/備用
+        '5542': ['S21610@chipmos.com'],
+        'HR': ['hr@chipmos.com'] 
     }
 
 app.config['SECRET_KEY'] = Config.SECRET_KEY
@@ -57,7 +39,7 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
 # ==========================================
-# 資料庫模型 (無須變動)
+# 資料庫模型
 # ==========================================
 class Feedback(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -72,7 +54,7 @@ with app.app_context():
     db.create_all()
 
 # ==========================================
-# 核心功能函式
+# 核心功能
 # ==========================================
 def auto_classify(comment):
     comment = comment.lower() if comment else ""
@@ -81,15 +63,11 @@ def auto_classify(comment):
     elif any(x in comment for x in ['建議', '希望', '可以']): return "產品建議 (Suggestion)"
     else: return "一般回饋 (General)"
 
-# ### 修改重點：升級版寄信功能 (處理列表) ###
 def send_notification_email(data, target_emails):
-    """
-    target_emails: 現在這是一個包含多個 Email 的列表 (List)
-    """
-    
-    # 防呆機制：如果傳進來的不是列表(只是單個字串)，把它變成列表，避免程式出錯
-    if isinstance(target_emails, str):
-        target_emails = [target_emails]
+    # 防呆：如果 Render 環境變數沒設定好，就不寄信，避免崩潰
+    if not Config.SENDER_EMAIL or not Config.SENDER_PASSWORD:
+        print(">> 系統警告：未設定 Email 環境變數，無法寄信。")
+        return False
 
     subject = f"【{data['department']}部門通知】新問卷：{data['category']} - 來自 {data['name']}"
     body = f"""
@@ -101,29 +79,25 @@ def send_notification_email(data, target_emails):
     系統分類：{data['category']}
     內容：{data['comment']}
     -----------------------------
+    (此為 Render 雲端自動發信)
     """
     
     try:
         msg = MIMEText(body, 'plain', 'utf-8')
         msg['Subject'] = subject
         msg['From'] = Config.SENDER_EMAIL
-        msg['To'] = ", ".join(target_emails) 
+        msg['To'] = ", ".join(target_emails)
 
-        # === 修改開始：改用 SSL 連線 (Port 465) ===
-        # 原本是 server = smtplib.SMTP(..., 587)
-        # 現在改成 SMTP_SSL，並且使用 465 Port
-        server = smtplib.SMTP_SSL('smtp.gmail.com', 465)
-        
-        # 注意：SSL 模式不需要 server.starttls()，直接登入即可
+        server = smtplib.SMTP(Config.SMTP_SERVER, Config.SMTP_PORT)
+        server.starttls() # Apple 支援 TLS 加密
         server.login(Config.SENDER_EMAIL, Config.SENDER_PASSWORD)
-        
         server.sendmail(Config.SENDER_EMAIL, target_emails, msg.as_string())
         server.quit()
-        # === 修改結束 ===
-
-        print(f">> Email 已群發至: {target_emails}")
+        print(f">> Email 已寄送至: {target_emails}")
+        return True
     except Exception as e:
         print(f">> Email 發送失敗: {e}")
+        return False
 
 def get_analytics_data():
     try:
@@ -138,9 +112,8 @@ def get_analytics_data():
         return {'avg_rating': 0, 'count': 0, 'category_counts': {}}
 
 # ==========================================
-# 網頁路由 (Routes)
+# 網頁路由
 # ==========================================
-
 @app.route('/', methods=['GET', 'POST'])
 def index():
     if request.method == 'POST':
@@ -150,25 +123,29 @@ def index():
         comment = request.form.get('comment')
         category = auto_classify(comment)
         
+        # 1. 存檔
         new_feedback = Feedback(name=name, department=department, rating=rating, comment=comment, category=category)
         db.session.add(new_feedback)
         db.session.commit()
         
-        # === 修改重點開始 ===
-        # 確保部門代號存在於設定檔中才寄信
+        # 2. 寄信
         if department in Config.DEPT_MAILS:
-            manager_emails = Config.DEPT_MAILS[department]
-            
-            send_notification_email({
+            target_emails = Config.DEPT_MAILS[department]
+            success = send_notification_email({
                 'name': name,
                 'department': department,
                 'rating': rating,
                 'comment': comment,
                 'category': category
-            }, manager_emails) 
-        # === 修改重點結束 ===
-        
-        flash(f'感謝您的回饋！通知已發送至 {department} 部門主管群。', 'success')
+            }, target_emails)
+            
+            if success:
+                flash(f'感謝！通知已發送至 {department} 部門主管信箱。', 'success')
+            else:
+                flash('回饋已儲存，但 Email 發送失敗 (請檢查 Render 環境變數)。', 'error')
+        else:
+            flash('感謝您的回饋！(此部門未設定通知信箱)', 'success')
+            
         return redirect(url_for('index'))
 
     departments = Config.DEPT_MAILS.keys()
@@ -177,31 +154,22 @@ def index():
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
-        input_user = request.form.get('username')
-        input_pwd = request.form.get('password')
-        
-        if input_user in Config.USERS and Config.USERS[input_user] == input_pwd:
+        # 簡易後台密碼驗證
+        if request.form.get('username') == 'admin' and request.form.get('password') == '1234':
             session['logged_in'] = True
-            session['username'] = input_user
-            flash(f'歡迎回來，{input_user}！', 'success')
             return redirect(url_for('dashboard'))
-        else:
-            flash('帳號或密碼錯誤', 'error')
-            
+        flash('帳號或密碼錯誤', 'error')
     return render_template('login.html')
 
 @app.route('/dashboard')
 def dashboard():
-    if not session.get('logged_in'):
-        return redirect(url_for('login'))
-    current_user = session.get('username')
+    if not session.get('logged_in'): return redirect(url_for('login'))
     stats = get_analytics_data()
-    return render_template('dashboard.html', stats=stats, current_user=current_user)
+    return render_template('dashboard.html', stats=stats)
 
 @app.route('/logout')
 def logout():
     session.pop('logged_in', None)
-    session.pop('username', None)
     return redirect(url_for('login'))
 
 if __name__ == '__main__':
