@@ -13,20 +13,17 @@ app = Flask(__name__)
 # ==========================================
 class Config:
     DB_NAME = 'feedback_data.db'
-    
-    # 讀取 Render 環境變數，如果沒有就用預設值 (確保安全性)
     SECRET_KEY = os.environ.get('SECRET_KEY', 'dev_key_123')
 
-    # === Email 設定 (Apple iCloud 專用) ===
-    SMTP_SERVER = 'smtp.mail.me.com'
-    SMTP_PORT = 587
+    # === Gmail 設定 (Google Mail) ===
+    SMTP_SERVER = 'smtp.gmail.com'
+    SMTP_PORT = 465  # Gmail SSL 專用埠
     
-    # 關鍵：這裡會去讀取你在 Render 設定的環境變數
+    # 讀取 Render 環境變數
     SENDER_EMAIL = os.environ.get('SENDER_EMAIL') 
     SENDER_PASSWORD = os.environ.get('SENDER_PASSWORD')
 
     # === 部門 Email 對照表 ===
-    # 請填入各部門主管的 Email (可以填你自己的信箱測試)
     DEPT_MAILS = {
         '5542': ['S21610@chipmos.com'],
         'HR': ['hr@chipmos.com'] 
@@ -64,7 +61,6 @@ def auto_classify(comment):
     else: return "一般回饋 (General)"
 
 def send_notification_email(data, target_emails):
-    # 防呆：如果 Render 環境變數沒設定好，就不寄信，避免崩潰
     if not Config.SENDER_EMAIL or not Config.SENDER_PASSWORD:
         print(">> 系統警告：未設定 Email 環境變數，無法寄信。")
         return False
@@ -88,28 +84,17 @@ def send_notification_email(data, target_emails):
         msg['From'] = Config.SENDER_EMAIL
         msg['To'] = ", ".join(target_emails)
 
-        server = smtplib.SMTP(Config.SMTP_SERVER, Config.SMTP_PORT)
-        server.starttls() # Apple 支援 TLS 加密
+        # === 關鍵修改：Gmail SSL 連線 ===
+        server = smtplib.SMTP_SSL(Config.SMTP_SERVER, Config.SMTP_PORT, timeout=10)
         server.login(Config.SENDER_EMAIL, Config.SENDER_PASSWORD)
         server.sendmail(Config.SENDER_EMAIL, target_emails, msg.as_string())
         server.quit()
-        print(f">> Email 已寄送至: {target_emails}")
+        
+        print(f">> Gmail 已寄送至: {target_emails}")
         return True
     except Exception as e:
         print(f">> Email 發送失敗: {e}")
         return False
-
-def get_analytics_data():
-    try:
-        df = pd.read_sql(Feedback.query.statement, db.session.connection())
-        if df.empty: return {'avg_rating': 0, 'count': 0, 'category_counts': {}}
-        return {
-            'avg_rating': round(df['rating'].mean(), 1),
-            'count': len(df),
-            'category_counts': df['category'].value_counts().to_dict()
-        }
-    except Exception:
-        return {'avg_rating': 0, 'count': 0, 'category_counts': {}}
 
 # ==========================================
 # 網頁路由
@@ -123,26 +108,28 @@ def index():
         comment = request.form.get('comment')
         category = auto_classify(comment)
         
-        # 1. 存檔
         new_feedback = Feedback(name=name, department=department, rating=rating, comment=comment, category=category)
         db.session.add(new_feedback)
         db.session.commit()
         
-        # 2. 寄信
         if department in Config.DEPT_MAILS:
             target_emails = Config.DEPT_MAILS[department]
-            success = send_notification_email({
-                'name': name,
-                'department': department,
-                'rating': rating,
-                'comment': comment,
-                'category': category
-            }, target_emails)
-            
-            if success:
-                flash(f'感謝！通知已發送至 {department} 部門主管信箱。', 'success')
-            else:
-                flash('回饋已儲存，但 Email 發送失敗 (請檢查 Render 環境變數)。', 'error')
+            try:
+                success = send_notification_email({
+                    'name': name,
+                    'department': department,
+                    'rating': rating,
+                    'comment': comment,
+                    'category': category
+                }, target_emails)
+                
+                if success:
+                    flash(f'感謝！通知已發送至 {department} (Gmail發送)。', 'success')
+                else:
+                    flash('回饋已儲存，但 Email 發送失敗。', 'error')
+            except Exception as e:
+                print(f"Error: {e}")
+                flash('回饋已儲存，但通知系統異常。', 'error')
         else:
             flash('感謝您的回饋！(此部門未設定通知信箱)', 'success')
             
@@ -154,7 +141,6 @@ def index():
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
-        # 簡易後台密碼驗證
         if request.form.get('username') == 'admin' and request.form.get('password') == '1234':
             session['logged_in'] = True
             return redirect(url_for('dashboard'))
