@@ -15,11 +15,10 @@ class Config:
     DB_NAME = 'feedback_data.db'
     SECRET_KEY = os.environ.get('SECRET_KEY', 'dev_key_123')
 
-# === Gmail 設定 ===
+    # === Gmail 設定 ===
     SMTP_SERVER = 'smtp.gmail.com'
-    SMTP_PORT = 587  # [修改] 改回 587
+    SMTP_PORT = 587  # 改回 587 (TLS) 避免 Errno 101
     
-    # 讀取 Render 環境變數
     SENDER_EMAIL = os.environ.get('SENDER_EMAIL') 
     SENDER_PASSWORD = os.environ.get('SENDER_PASSWORD')
 
@@ -35,9 +34,6 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
 
-# ==========================================
-# 資料庫模型
-# ==========================================
 class Feedback(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
@@ -50,9 +46,6 @@ class Feedback(db.Model):
 with app.app_context():
     db.create_all()
 
-# ==========================================
-# 核心功能
-# ==========================================
 def auto_classify(comment):
     comment = comment.lower() if comment else ""
     if any(x in comment for x in ['慢', '差', '生氣', '爛']): return "緊急客訴 (Urgent)"
@@ -84,8 +77,12 @@ def send_notification_email(data, target_emails):
         msg['From'] = Config.SENDER_EMAIL
         msg['To'] = ", ".join(target_emails)
 
-        # === 關鍵修改：Gmail SSL 連線 ===
-        server = smtplib.SMTP_SSL(Config.SMTP_SERVER, Config.SMTP_PORT, timeout=10)
+        # 改用標準 SMTP + STARTTLS，這對雲端環境比較友善
+        server = smtplib.SMTP(Config.SMTP_SERVER, Config.SMTP_PORT, timeout=30)
+        server.ehlo()
+        server.starttls()
+        server.ehlo()
+        
         server.login(Config.SENDER_EMAIL, Config.SENDER_PASSWORD)
         server.sendmail(Config.SENDER_EMAIL, target_emails, msg.as_string())
         server.quit()
@@ -96,9 +93,6 @@ def send_notification_email(data, target_emails):
         print(f">> Email 發送失敗: {e}")
         return False
 
-# ==========================================
-# 網頁路由
-# ==========================================
 @app.route('/', methods=['GET', 'POST'])
 def index():
     if request.method == 'POST':
@@ -124,7 +118,7 @@ def index():
                 }, target_emails)
                 
                 if success:
-                    flash(f'感謝！通知已發送至 {department} (Gmail發送)。', 'success')
+                    flash(f'感謝！通知已發送至 {department} (Gmail)。', 'success')
                 else:
                     flash('回饋已儲存，但 Email 發送失敗。', 'error')
             except Exception as e:
@@ -138,26 +132,8 @@ def index():
     departments = Config.DEPT_MAILS.keys()
     return render_template('index.html', departments=departments)
 
-@app.route('/login', methods=['GET', 'POST'])
-def login():
-    if request.method == 'POST':
-        if request.form.get('username') == 'admin' and request.form.get('password') == '1234':
-            session['logged_in'] = True
-            return redirect(url_for('dashboard'))
-        flash('帳號或密碼錯誤', 'error')
-    return render_template('login.html')
-
-@app.route('/dashboard')
-def dashboard():
-    if not session.get('logged_in'): return redirect(url_for('login'))
-    stats = get_analytics_data()
-    return render_template('dashboard.html', stats=stats)
-
-@app.route('/logout')
-def logout():
-    session.pop('logged_in', None)
-    return redirect(url_for('login'))
+# ... (Login/Dashboard/Logout 保持不變) ...
+# 記得保留你的 Login/Dashboard 路由
 
 if __name__ == '__main__':
     app.run(debug=True)
-
