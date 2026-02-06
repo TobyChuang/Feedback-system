@@ -1,3 +1,19 @@
+# ==========================================
+# [魔法修正區] 強制使用 IPv4
+# 解決 Render 上連線 Gmail 出現 Errno 101 的問題
+# ==========================================
+import socket
+
+_old_getaddrinfo = socket.getaddrinfo
+
+def new_getaddrinfo(*args, **kwargs):
+    # 呼叫原本的函式，但過濾掉 IPv6，只保留 IPv4 (AF_INET)
+    responses = _old_getaddrinfo(*args, **kwargs)
+    return [response for response in responses if response[0] == socket.AF_INET]
+
+socket.getaddrinfo = new_getaddrinfo
+# ==========================================
+
 import os
 import smtplib
 from email.mime.text import MIMEText
@@ -17,7 +33,7 @@ class Config:
 
     # === Gmail 設定 ===
     SMTP_SERVER = 'smtp.gmail.com'
-    SMTP_PORT = 587  # 改回 587 (TLS) 避免 Errno 101
+    SMTP_PORT = 587  # 維持使用 587 (TLS)
     
     SENDER_EMAIL = os.environ.get('SENDER_EMAIL') 
     SENDER_PASSWORD = os.environ.get('SENDER_PASSWORD')
@@ -77,7 +93,7 @@ def send_notification_email(data, target_emails):
         msg['From'] = Config.SENDER_EMAIL
         msg['To'] = ", ".join(target_emails)
 
-        # 改用標準 SMTP + STARTTLS，這對雲端環境比較友善
+        # 使用標準 SMTP + STARTTLS (IPv4 模式)
         server = smtplib.SMTP(Config.SMTP_SERVER, Config.SMTP_PORT, timeout=30)
         server.ehlo()
         server.starttls()
@@ -132,7 +148,7 @@ def index():
     departments = Config.DEPT_MAILS.keys()
     return render_template('index.html', departments=departments)
 
-# ... (Login/Dashboard/Logout 保持不變) ...
+# ... (Login/Dashboard/Logout 保持原樣) ...
 # 記得保留你的 Login/Dashboard 路由
 
 if __name__ == '__main__':
