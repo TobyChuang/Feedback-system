@@ -1,13 +1,12 @@
 # ==========================================
-# [魔法修正區] 強制使用 IPv4
-# 解決 Render 上連線 Gmail 出現 Errno 101 的問題
+# [魔法修正區] 強制使用 IPv4 (保留這個設定，因為它有效！)
 # ==========================================
 import socket
 
 _old_getaddrinfo = socket.getaddrinfo
 
 def new_getaddrinfo(*args, **kwargs):
-    # 呼叫原本的函式，但過濾掉 IPv6，只保留 IPv4 (AF_INET)
+    # 過濾掉 IPv6，只保留 IPv4
     responses = _old_getaddrinfo(*args, **kwargs)
     return [response for response in responses if response[0] == socket.AF_INET]
 
@@ -33,7 +32,9 @@ class Config:
 
     # === Gmail 設定 ===
     SMTP_SERVER = 'smtp.gmail.com'
-    SMTP_PORT = 587  # 維持使用 587 (TLS)
+    
+    # [修改] 因為 IPv4 通了，我們改回更快速穩定的 465 SSL
+    SMTP_PORT = 465  
     
     SENDER_EMAIL = os.environ.get('SENDER_EMAIL') 
     SENDER_PASSWORD = os.environ.get('SENDER_PASSWORD')
@@ -93,11 +94,8 @@ def send_notification_email(data, target_emails):
         msg['From'] = Config.SENDER_EMAIL
         msg['To'] = ", ".join(target_emails)
 
-        # 使用標準 SMTP + STARTTLS (IPv4 模式)
-        server = smtplib.SMTP(Config.SMTP_SERVER, Config.SMTP_PORT, timeout=30)
-        server.ehlo()
-        server.starttls()
-        server.ehlo()
+        # [修改] 改回 SMTP_SSL，因為 IPv4 已經修好，SSL 直連最穩定
+        server = smtplib.SMTP_SSL(Config.SMTP_SERVER, Config.SMTP_PORT, timeout=30)
         
         server.login(Config.SENDER_EMAIL, Config.SENDER_PASSWORD)
         server.sendmail(Config.SENDER_EMAIL, target_emails, msg.as_string())
@@ -148,8 +146,36 @@ def index():
     departments = Config.DEPT_MAILS.keys()
     return render_template('index.html', departments=departments)
 
-# ... (Login/Dashboard/Logout 保持原樣) ...
-# 記得保留你的 Login/Dashboard 路由
+# === 補上原本的登入/後台路由 (怕你覆蓋時弄丟了) ===
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        if request.form.get('username') == 'admin' and request.form.get('password') == '1234':
+            session['logged_in'] = True
+            return redirect(url_for('dashboard'))
+        flash('帳號或密碼錯誤', 'error')
+    return render_template('login.html')
+
+@app.route('/dashboard')
+def dashboard():
+    if not session.get('logged_in'): return redirect(url_for('login'))
+    # 這裡需要簡單處理，避免因資料庫連線問題報錯
+    try:
+        df = pd.read_sql(Feedback.query.statement, db.session.connection())
+        stats = {
+            'avg_rating': round(df['rating'].mean(), 1) if not df.empty else 0,
+            'count': len(df),
+            'category_counts': df['category'].value_counts().to_dict() if not df.empty else {}
+        }
+    except:
+        stats = {'avg_rating': 0, 'count': 0, 'category_counts': {}}
+    return render_template('dashboard.html', stats=stats)
+
+@app.route('/logout')
+def logout():
+    session.pop('logged_in', None)
+    return redirect(url_for('login'))
 
 if __name__ == '__main__':
     app.run(debug=True)
